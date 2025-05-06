@@ -12,7 +12,7 @@ internal class DnsBitWriter : DnsBitReaderWriterBase
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
     }
 
-    public void Write(string value, bool useCompression)
+    public void Write(OffsetManager offsetManager, string value, bool useCompression)
     {
         if (value is null)
             throw new ArgumentNullException(nameof(value));
@@ -28,12 +28,12 @@ internal class DnsBitWriter : DnsBitReaderWriterBase
             ushort pointer = (ushort)(previousOffset | 0b1100000000000000);
 
             //This is a pointer
-            Write(pointer);
+            Write(offsetManager, pointer);
         }
         else
         {
             //Store the offset before we move it
-            stringOffsets.Add(value, Offset);
+            stringOffsets.Add(value, offsetManager.Offset);
 
             var parts = value.Split('.');
 
@@ -42,44 +42,44 @@ internal class DnsBitWriter : DnsBitReaderWriterBase
                 if (part.Length > byte.MaxValue)
                     throw new ArgumentException($"Strings must be 256 characters or less. The specified string '{value}' was {value.Length} characters long.", nameof(value));
 
-                Write((byte)part.Length);
+                Write(offsetManager, (byte)part.Length);
 
                 var buffer = Encoding.ASCII.GetBytes(part);
 
-                Write(buffer);
+                Write(offsetManager, buffer);
             }
 
             //Null terminate the string.
-            Write((byte)0x00);
+            Write(offsetManager, (byte)0x00);
         }
     }
 
-    public void Write(byte value)
+    public void Write(OffsetManager offsetManager, byte value)
     {
-        Write([value]);
+        Write(offsetManager, [value]);
     }
 
-    public void Write(ushort value)
+    public void Write(OffsetManager offsetManager, ushort value)
     {
         var buffer = bitConverter.GetBytes(value) ?? [0, 0];
 
-        Write(buffer);
+        Write(offsetManager, buffer);
     }
 
-    public void Write(uint value)
+    public void Write(OffsetManager offsetManager, uint value)
     {
         var buffer = bitConverter?.GetBytes(value) ?? [0, 0, 0, 0];
 
-        Write(buffer);
+        Write(offsetManager, buffer);
     }
 
-    public void Write(byte[] value)
+    public void Write(OffsetManager offsetManager, byte[] value)
     {
         if (value is null)
             throw new ArgumentNullException(nameof(value));
 
         stream.Write(value);
 
-        AdvanceOffset(value.Length);
+        offsetManager.Advance(value.Length);
     }
 }

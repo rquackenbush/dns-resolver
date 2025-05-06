@@ -6,111 +6,106 @@ namespace Dns.Resolver.Serialization
     {
         private readonly byte[] buffer;
 
-        private readonly Dictionary<int, string> previouslyReadStrings = new Dictionary<int, string>();
+        private const int MaxStringPartCount = 100;
 
         public DnsBitReader(byte[] buffer)
         {
             this.buffer = buffer ?? throw new ArgumentNullException(nameof(buffer));
         }
 
-        public string ReadString()
+        public string ReadString(OffsetManager offsetManager)
         {
-            var peekByte = PeekByte();
+            var parts = new List<string>();
 
-            //Peek at the first byte to see if this is an offset or a length
-            if (peekByte.IsStringPointerMask())
+            ReadStringParts(offsetManager, parts);
+
+            return parts.Count > 0 ? string.Join('.', parts) : string.Empty;            
+        }
+
+        private void ReadStringParts(OffsetManager offsetManager, List<string> parts)
+        {
+            var currentOffsetManager = offsetManager;
+
+            var count = 0;
+
+            while (true)
             {
-                //This is an offset
-                var rawPointerValue = ReadUInt16();
+                count++;
 
-                //Strip off the pointer mask leading bits
-                var pointerValue = rawPointerValue.ClearStringPointerMask();
+                if (count > MaxStringPartCount)
+                    throw new InvalidOperationException($"MaxStringPartCount {MaxStringPartCount} exceeded while parsing string.");
 
-                if (!previouslyReadStrings.TryGetValue(pointerValue, out var previouslyReadString))
-                    throw new InvalidOperationException($"No string was previously read at offset {pointerValue}.");
+                var peekByte = PeekByte(currentOffsetManager);
 
-                return previouslyReadString;
-            }
-            else
-            {
-                var parts = new List<string>();
-
-                //Save the offset for later
-                var stringOffset = Offset;
-
-                var part = ReadStringPart();
-
-                while (part != null)
+                //Peek at the first byte to see if this is an offset or a length
+                if (peekByte.IsStringPointerMask())
                 {
-                    parts.Add(part);
+                    //This is an offset
+                    var rawPointerValue = ReadUInt16(currentOffsetManager);
 
-                    part = ReadStringPart();
+                    //Strip off the pointer mask leading bits
+                    var pointerValue = rawPointerValue.ClearStringPointerMask();
+
+                    currentOffsetManager = new OffsetManager(pointerValue);
                 }
+                else
+                {
+                    //Read the size of the string part.
+                    var partLength = ReadByte(currentOffsetManager);
 
-                var result = parts.Count > 0 ? string.Join('.', parts) : string.Empty;
+                    //This is the end of the string parts.
+                    if (partLength == 0)
+                        return;
 
-                previouslyReadStrings.Add(stringOffset, result);
+                    parts.Add(Encoding.ASCII.GetString(buffer, currentOffsetManager.Offset, partLength));
 
-                return result;
-            }
+                    currentOffsetManager.Advance(partLength);
+                }
+            };
         }
 
-        private string? ReadStringPart()
+        private byte PeekByte(OffsetManager offsetManager)
         {
-            var partLength = ReadByte();
+            return buffer[offsetManager.Offset];
+        }
 
-            if (partLength == 0)
-                return null;
+        public byte ReadByte(OffsetManager offsetManager)
+        {
+            var value = buffer[offsetManager.Offset];
 
-            var value = Encoding.ASCII.GetString(buffer, Offset, partLength);
-
-            AdvanceOffset(partLength);
+            offsetManager.Advance(1);
 
             return value;
         }
 
-        private byte PeekByte()
+        public ushort ReadUInt16(OffsetManager offsetManager) 
         {
-            return buffer[Offset];
-        }
+            var value = bitConverter.ToUInt16(buffer, offsetManager.Offset);
 
-        public byte ReadByte()
-        {
-            var value = buffer[Offset];
-
-            AdvanceOffset(1);
+            offsetManager.Advance(2);
 
             return value;
         }
 
-        public ushort ReadUInt16() 
-        {
-            var value = bitConverter.ToUInt16(buffer, Offset);
-
-            AdvanceOffset(2);
-
-            return value;
-        }
-
-        public byte[] ReadBytes(int count)
+        public byte[] ReadBytes(OffsetManager offsetManager, int count)
         {
             if (count == 0)
                 return Array.Empty<byte>();
 
             var value = new byte[count];
 
-            Array.Copy(buffer, Offset, value, 0, count);
+            Array.Copy(buffer, offsetManager.Offset, value, 0, count);
 
-            AdvanceOffset(count);
+            offsetManager.Advance(count);
 
             return value;
         }
 
-        public UInt32 ReadUInt32()
+        public UInt32 ReadUInt32(OffsetManager offsetManager)
         {
-            var value = bitConverter.ToUInt32(buffer, Offset);
+            var value = bitConverter.ToUInt32(buffer, offsetManager.Offset);
 
-            AdvanceOffset(4);
+            offsetManager.Advance(4);
 
             return value;
         }

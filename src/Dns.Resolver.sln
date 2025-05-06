@@ -7,6 +7,8 @@ Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dns.Resolver", "Dns.Resolve
 EndProject
 Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dns.Resolver.Tests", "Dns.Resolver.Tests\Dns.Resolver.Tests.csproj", "{A5F4B23E-F244-4848-B5E8-EE3610D68355}"
 EndProject
+Project("{FAE04EC0-301F-11D3-BF4B-00C04F79EFBC}") = "Dns.Resolver.Cli", "Dns.Resolver.Cli\Dns.Resolver.Cli.csproj", "{0785A3CE-9344-4609-8BFA-6A36C4C216AD}"
+EndProject
 Global
 	GlobalSection(SolutionConfigurationPlatforms) = preSolution
 		Debug|Any CPU = Debug|Any CPU
@@ -21,6 +23,10 @@ Global
 		{A5F4B23E-F244-4848-B5E8-EE3610D68355}.Debug|Any CPU.Build.0 = Debug|Any CPU
 		{A5F4B23E-F244-4848-B5E8-EE3610D68355}.Release|Any CPU.ActiveCfg = Release|Any CPU
 		{A5F4B23E-F244-4848-B5E8-EE3610D68355}.Release|Any CPU.Build.0 = Release|Any CPU
+		{0785A3CE-9344-4609-8BFA-6A36C4C216AD}.Debug|Any CPU.ActiveCfg = Debug|Any CPU
+		{0785A3CE-9344-4609-8BFA-6A36C4C216AD}.Debug|Any CPU.Build.0 = Debug|Any CPU
+		{0785A3CE-9344-4609-8BFA-6A36C4C216AD}.Release|Any CPU.ActiveCfg = Release|Any CPU
+		{0785A3CE-9344-4609-8BFA-6A36C4C216AD}.Release|Any CPU.Build.0 = Release|Any CPU
 	EndGlobalSection
 	GlobalSection(SolutionProperties) = preSolution
 		HideSolutionNode = FALSE

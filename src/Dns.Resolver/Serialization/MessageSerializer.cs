@@ -13,6 +13,7 @@ public class MessageSerializer
     /// <param name="Options"></param>
     private record class WriterContext(DnsBitWriter Writer, MessageSerializerOptions Options)
     {
+        public OffsetManager OffsetManager { get; } = new OffsetManager();
     }
 
     public static byte[] Serialize(Message message, MessageSerializerOptions? options = null)
@@ -42,14 +43,14 @@ public class MessageSerializer
 
     private static void WriteHeader(WriterContext context, Header header, ushort questionCount, ushort answerCount, ushort nameServerRRCount, ushort additionalRRCount)
     {
-        context.Writer.Write(header.TransactionId);
+        context.Writer.Write(context.OffsetManager, header.TransactionId);
 
         WriteHeaderFlags(context, header.Flags);
 
-        context.Writer.Write(questionCount);
-        context.Writer.Write(answerCount);
-        context.Writer.Write(nameServerRRCount);
-        context.Writer.Write(additionalRRCount);
+        context.Writer.Write(context.OffsetManager, questionCount);
+        context.Writer.Write(context.OffsetManager, answerCount);
+        context.Writer.Write(context.OffsetManager, nameServerRRCount);
+        context.Writer.Write(context.OffsetManager, additionalRRCount);
     }
 
     private static void WriteHeaderFlags(WriterContext context, HeaderFlags flags)
@@ -63,7 +64,7 @@ public class MessageSerializer
            DoubleByteHelper.GetBit(flags.RecursionAvailable, 8) |
            DoubleByteHelper.GetQuadBits(flags.ResponseCode, 12));
 
-        context.Writer.Write(value);
+        context.Writer.Write(context.OffsetManager, value);
     }
 
     private static void WriteQuestions(WriterContext context, Question[]? questions)
@@ -73,10 +74,9 @@ public class MessageSerializer
 
         foreach(var question in questions)
         {
-            context.Writer.Write(question.Name, context.Options.CompressStrings);
-
-            context.Writer.Write(question.Type);
-            context.Writer.Write(question.ClassCode);
+            context.Writer.Write(context.OffsetManager, question.Name, context.Options.CompressStrings);
+            context.Writer.Write(context.OffsetManager, question.Type);
+            context.Writer.Write(context.OffsetManager, question.ClassCode);
         }
     }
 
@@ -87,19 +87,19 @@ public class MessageSerializer
 
         foreach(var resourceRecord in resourceRecords)
         {
-            context.Writer.Write(resourceRecord.Name, context.Options.CompressStrings);
-            context.Writer.Write(resourceRecord.Type);
-            context.Writer.Write(resourceRecord.Class);
-            context.Writer.Write(resourceRecord.TimeToLive);
+            context.Writer.Write(context.OffsetManager, resourceRecord.Name, context.Options.CompressStrings);
+            context.Writer.Write(context.OffsetManager, resourceRecord.Type);
+            context.Writer.Write(context.OffsetManager, resourceRecord.Class);
+            context.Writer.Write(context.OffsetManager, resourceRecord.TimeToLive);
 
             if (resourceRecord.ResourceRecordData == null)
             {
-                context.Writer.Write((ushort)0);
+                context.Writer.Write(context.OffsetManager, (ushort)0);
             }
             else
             {
-                context.Writer.Write((ushort)resourceRecord.ResourceRecordData.Length);
-                context.Writer.Write(resourceRecord.ResourceRecordData);
+                context.Writer.Write(context.OffsetManager, (ushort)resourceRecord.ResourceRecordData.Length);
+                context.Writer.Write(context.OffsetManager, resourceRecord.ResourceRecordData);
             }
         }
     }
@@ -111,10 +111,13 @@ public class MessageSerializer
     /// <param name="Options"></param>
     private record class ReaderContext(DnsBitReader Reader, MessageSerializerOptions Options)
     {
+        public OffsetManager OffsetManager { get; } = new OffsetManager();
     }
 
     public static Message Deserialize(byte[] buffer, MessageSerializerOptions? options = null)
     {
+        var offsetManager = new OffsetManager();
+
         options = options ?? MessageSerializerOptions.Default;
 
         var reader = new DnsBitReader(buffer);
@@ -123,14 +126,12 @@ public class MessageSerializer
 
         var headerResult = ReadHeader(context);
 
-        var questions = ReadQuestions(context, headerResult.QuestionCount);
-        var answers = ReadResourceRecords(context, headerResult.AnswerCount);
-        var nameServerResourceRecords = ReadResourceRecords(context, headerResult.NameServerRRCount);
-        var additionalResourceRecords = ReadResourceRecords(context, headerResult.AdditionalRRCount);
-
         return new Message { 
             Header = headerResult.Header,
-        };
+            Questions = ReadQuestions(context, headerResult.QuestionCount),
+            Answers = ReadResourceRecords(context, headerResult.AnswerCount),
+            NameServerResourceRecords = ReadResourceRecords(context, headerResult.NameServerRRCount),
+            AdditionalResourceRecords = ReadResourceRecords(context, headerResult.AdditionalRRCount)};
     }
 
     private static Question[] ReadQuestions(ReaderContext context, int count)
@@ -149,9 +150,9 @@ public class MessageSerializer
     {
         return  new Question
         {
-            Name = context.Reader.ReadString(),
-            Type = context.Reader.ReadUInt16(),
-            ClassCode = context.Reader.ReadUInt16()
+            Name = context.Reader.ReadString(context.OffsetManager),
+            Type = context.Reader.ReadUInt16(context.OffsetManager),
+            ClassCode = context.Reader.ReadUInt16(context.OffsetManager)
         };
     }
 
@@ -171,17 +172,17 @@ public class MessageSerializer
     {
         var resourceRecord = new ResourceRecord
         {
-            Name = context.Reader.ReadString(),
-            Type = context.Reader.ReadUInt16(),
-            Class = context.Reader.ReadUInt16(),
-            TimeToLive = context.Reader.ReadUInt32()
+            Name = context.Reader.ReadString(context.OffsetManager),
+            Type = context.Reader.ReadUInt16(context.OffsetManager),
+            Class = context.Reader.ReadUInt16(context.OffsetManager),
+            TimeToLive = context.Reader.ReadUInt32(context.OffsetManager)
         };
 
-        var length = context.Reader.ReadUInt16();
+        var length = context.Reader.ReadUInt16(context.OffsetManager);
 
         if (length > 0)
         {
-            resourceRecord.ResourceRecordData = context.Reader.ReadBytes(length);
+            resourceRecord.ResourceRecordData = context.Reader.ReadBytes(context.OffsetManager, length);
         }
 
         return resourceRecord;
@@ -191,23 +192,21 @@ public class MessageSerializer
     {
         var header = new Header
         {
-            TransactionId = context.Reader.ReadUInt16(),
+            TransactionId = context.Reader.ReadUInt16(context.OffsetManager),
             Flags = ReadFlags(context),
         };
 
         return new ReadHeaderResult(
             header,
-            context.Reader.ReadUInt16(),
-            context.Reader.ReadUInt16(),
-            context.Reader.ReadUInt16(),
-            context.Reader.ReadUInt16());
+            context.Reader.ReadUInt16(context.OffsetManager),
+            context.Reader.ReadUInt16(context.OffsetManager),
+            context.Reader.ReadUInt16(context.OffsetManager),
+            context.Reader.ReadUInt16(context.OffsetManager));
     }
-
-
 
     private static HeaderFlags ReadFlags(ReaderContext context)
     {
-        var value = context.Reader.ReadUInt16();
+        var value = context.Reader.ReadUInt16(context.OffsetManager);
 
         return new HeaderFlags
         {
@@ -222,9 +221,6 @@ public class MessageSerializer
 
     private record class ReadHeaderResult(Header Header, ushort QuestionCount, ushort AnswerCount, ushort NameServerRRCount, ushort AdditionalRRCount)
     {
+        
     }
-
-    /*
-       
-     */
 }
