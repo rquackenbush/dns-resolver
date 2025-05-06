@@ -1,21 +1,18 @@
-﻿using BitConverter;
-using System.Text;
+﻿using System.Text;
 
 namespace Dns.Resolver.Serialization;
 
-internal class DnsBitWriter
+internal class DnsBitWriter : DnsBitReaderWriterBase
 {
-    private static EndianBitConverter bitConverter = EndianBitConverter.BigEndian;
     private readonly Stream stream;
-    private uint offset;
-    private readonly Dictionary<string, uint> stringOffsets = new Dictionary<string, uint>();
+    private readonly Dictionary<string, int> stringOffsets = new Dictionary<string, int>();
 
     internal DnsBitWriter(Stream stream)
     {
         this.stream = stream ?? throw new ArgumentNullException(nameof(stream));
     }
 
-    public void Write(string value, bool useCompression = true)
+    public void Write(string value, bool useCompression)
     {
         if (value is null)
             throw new ArgumentNullException(nameof(value));
@@ -36,7 +33,7 @@ internal class DnsBitWriter
         else
         {
             //Store the offset before we move it
-            stringOffsets.Add(value, offset);
+            stringOffsets.Add(value, Offset);
 
             var parts = value.Split('.');
 
@@ -59,27 +56,21 @@ internal class DnsBitWriter
 
     public void Write(byte value)
     {
-        stream.Write([value]);
-
-        offset++;
+        Write([value]);
     }
 
     public void Write(ushort value)
     {
         var buffer = bitConverter.GetBytes(value) ?? [0, 0];
 
-        stream.Write(buffer);
-
-        offset += (uint)buffer.Length;
+        Write(buffer);
     }
 
     public void Write(uint value)
     {
         var buffer = bitConverter?.GetBytes(value) ?? [0, 0, 0, 0];
 
-        stream.Write(buffer);
-
-        offset += (uint)buffer.Length;
+        Write(buffer);
     }
 
     public void Write(byte[] value)
@@ -89,6 +80,6 @@ internal class DnsBitWriter
 
         stream.Write(value);
 
-        offset += (uint)value.Length;
+        AdvanceOffset(value.Length);
     }
 }

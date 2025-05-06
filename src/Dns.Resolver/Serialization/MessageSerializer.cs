@@ -6,7 +6,16 @@ namespace Dns.Resolver.Serialization;
 
 public class MessageSerializer
 {
-    public static byte[] Serialize(Message message)
+    /// <summary>
+    /// Trivial class to group commonly needed objects for implementation.
+    /// </summary>
+    /// <param name="Writer"></param>
+    /// <param name="Options"></param>
+    private record class WriterContext(DnsBitWriter Writer, MessageSerializerOptions Options)
+    {
+    }
+
+    public static byte[] Serialize(Message message, MessageSerializerOptions? options = null)
     {
         if (message.Header == null)
             throw new ArgumentException("message must have a Header.");
@@ -15,147 +24,207 @@ public class MessageSerializer
 
         var writer = new DnsBitWriter(stream);
 
+        var context = new WriterContext(new DnsBitWriter(stream), options ?? MessageSerializerOptions.Default);
+
         ushort questionCount = (ushort)(message.Questions?.Length ?? 0);
         ushort answerCount = (ushort)(message.Answers?.Length ?? 0);
         ushort nameServerRRCount = (ushort)(message.NameServerResourceRecords?.Length ?? 0);
         ushort additionalRRCount = (ushort)(message.AdditionalResourceRecords?.Length ?? 0);
 
-        WriteHeader(message.Header, questionCount, answerCount, nameServerRRCount, additionalRRCount, writer);
-        WriteQuestions(message.Questions, writer);
-        WriteResourceRecords(message.Answers, writer);
-        WriteResourceRecords(message.NameServerResourceRecords, writer);
-        WriteResourceRecords(message.AdditionalResourceRecords, writer);
+        WriteHeader(context, message.Header, questionCount, answerCount, nameServerRRCount, additionalRRCount);
+        WriteQuestions(context, message.Questions);
+        WriteResourceRecords(context, message.Answers);
+        WriteResourceRecords(context, message.NameServerResourceRecords);
+        WriteResourceRecords(context, message.AdditionalResourceRecords);
 
         return stream.ToArray();
     }
 
-    private static void WriteHeader(Header header, ushort questionCount, ushort answerCount, ushort nameServerRRCount, ushort additionalRRCount, DnsBitWriter writer)
+    private static void WriteHeader(WriterContext context, Header header, ushort questionCount, ushort answerCount, ushort nameServerRRCount, ushort additionalRRCount)
     {
-        writer.Write(header.TransactionId);
+        context.Writer.Write(header.TransactionId);
 
-        WriteHeaderFlags(header.Flags, writer);
+        WriteHeaderFlags(context, header.Flags);
 
-        writer.Write(questionCount);
-        writer.Write(answerCount);
-        writer.Write(nameServerRRCount);
-        writer.Write(additionalRRCount);
-
+        context.Writer.Write(questionCount);
+        context.Writer.Write(answerCount);
+        context.Writer.Write(nameServerRRCount);
+        context.Writer.Write(additionalRRCount);
     }
 
-    private static void WriteHeaderFlags(HeaderFlags flags, DnsBitWriter writer)
+    private static void WriteHeaderFlags(WriterContext context, HeaderFlags flags)
     {
         ushort value = (ushort)(
            DoubleByteHelper.GetBit(flags.QueryReply == QueryReply.Reply, 0) |
            DoubleByteHelper.GetQuadBits((byte)flags.OpCode, 1) |
            DoubleByteHelper.GetBit(flags.AuthoritativeAnswer, 5) |
-           DoubleByteHelper.GetBit(flags.TrunCation, 6) |
+           DoubleByteHelper.GetBit(flags.Truncated, 6) |
            DoubleByteHelper.GetBit(flags.RecursionDesired, 7) |
            DoubleByteHelper.GetBit(flags.RecursionAvailable, 8) |
            DoubleByteHelper.GetQuadBits(flags.ResponseCode, 12));
 
-        writer.Write(value);
+        context.Writer.Write(value);
     }
 
-    private static void WriteQuestions(Question[]? questions, DnsBitWriter writer)
+    private static void WriteQuestions(WriterContext context, Question[]? questions)
     {
         if (questions == null)
             return;
 
         foreach(var question in questions)
         {
-            WriteQuestion(question, writer);
+            context.Writer.Write(question.Name, context.Options.CompressStrings);
+
+            context.Writer.Write(question.Type);
+            context.Writer.Write(question.ClassCode);
         }
     }
 
-    private static void WriteQuestion(Question question, DnsBitWriter writer)
-    {
-        writer.Write(question.Name);
-
-        writer.Write(question.Type);
-        writer.Write(question.ClassCode);
-    }
-
-    private static void WriteResourceRecords(ResourceRecord[]? resourceRecords, DnsBitWriter writer)
+    private static void WriteResourceRecords(WriterContext context, ResourceRecord[]? resourceRecords)
     {
         if (resourceRecords == null) 
             return;
 
         foreach(var resourceRecord in resourceRecords)
         {
-            WriteResourceRecord(resourceRecord, writer);
+            context.Writer.Write(resourceRecord.Name, context.Options.CompressStrings);
+            context.Writer.Write(resourceRecord.Type);
+            context.Writer.Write(resourceRecord.Class);
+            context.Writer.Write(resourceRecord.TimeToLive);
+
+            if (resourceRecord.ResourceRecordData == null)
+            {
+                context.Writer.Write((ushort)0);
+            }
+            else
+            {
+                context.Writer.Write((ushort)resourceRecord.ResourceRecordData.Length);
+                context.Writer.Write(resourceRecord.ResourceRecordData);
+            }
         }
     }
 
-    private static void WriteResourceRecord(ResourceRecord resourceRecord, DnsBitWriter writer)
+    /// <summary>
+    /// Trivial class to group commonly needed objects for implementation.
+    /// </summary>
+    /// <param name="Reader"></param>
+    /// <param name="Options"></param>
+    private record class ReaderContext(DnsBitReader Reader, MessageSerializerOptions Options)
     {
-        writer.Write(resourceRecord.Name);
-        writer.Write(resourceRecord.Type);
-        writer.Write(resourceRecord.Class);
-        writer.Write(resourceRecord.TimeToLive);
+    }
 
-        if (resourceRecord.ResourceRecordData == null)
+    public static Message Deserialize(byte[] buffer, MessageSerializerOptions? options = null)
+    {
+        options = options ?? MessageSerializerOptions.Default;
+
+        var reader = new DnsBitReader(buffer);
+
+        var context = new ReaderContext(reader, options);
+
+        var headerResult = ReadHeader(context);
+
+        var questions = ReadQuestions(context, headerResult.QuestionCount);
+        var answers = ReadResourceRecords(context, headerResult.AnswerCount);
+        var nameServerResourceRecords = ReadResourceRecords(context, headerResult.NameServerRRCount);
+        var additionalResourceRecords = ReadResourceRecords(context, headerResult.AdditionalRRCount);
+
+        return new Message { 
+            Header = headerResult.Header,
+        };
+    }
+
+    private static Question[] ReadQuestions(ReaderContext context, int count)
+    {
+        var questions = new Question[count];
+
+        for (var index = 0; index < count; index++) 
         {
-            writer.Write((ushort)0);
+            questions[index] = ReadQuestion(context);
         }
-        else
+
+        return questions.ToArray();
+    }
+
+    private static Question ReadQuestion(ReaderContext context)
+    {
+        return  new Question
         {
-            writer.Write((ushort)resourceRecord.ResourceRecordData.Length);
-            writer.Write(resourceRecord.ResourceRecordData);
+            Name = context.Reader.ReadString(),
+            Type = context.Reader.ReadUInt16(),
+            ClassCode = context.Reader.ReadUInt16()
+        };
+    }
+
+    private static ResourceRecord[] ReadResourceRecords(ReaderContext context, int count)
+    {
+        var resourceRecords = new ResourceRecord[count];
+
+        for(var index = 0; index < count; index++)
+        {
+            resourceRecords[index] = ReadResourceRecord(context);
         }
+
+        return resourceRecords;
     }
 
-    public static Message Deserialize(byte[] buffer)
+    private static ResourceRecord ReadResourceRecord(ReaderContext context)
     {
-        throw new NotImplementedException();
-    }
-}
+        var resourceRecord = new ResourceRecord
+        {
+            Name = context.Reader.ReadString(),
+            Type = context.Reader.ReadUInt16(),
+            Class = context.Reader.ReadUInt16(),
+            TimeToLive = context.Reader.ReadUInt32()
+        };
 
-internal static class DoubleByteHelper
-{
-    public static ushort GetBit(bool value, int position)
+        var length = context.Reader.ReadUInt16();
+
+        if (length > 0)
+        {
+            resourceRecord.ResourceRecordData = context.Reader.ReadBytes(length);
+        }
+
+        return resourceRecord;
+    }
+
+    private static ReadHeaderResult ReadHeader(ReaderContext context)
     {
-        if (position > 15)
-            throw new ArgumentOutOfRangeException(nameof(position), "position must be between 0 and 15.");
+        var header = new Header
+        {
+            TransactionId = context.Reader.ReadUInt16(),
+            Flags = ReadFlags(context),
+        };
 
-        if (value)
-            return (ushort)(0b0001 << (15 - position));
-
-        return 0;
+        return new ReadHeaderResult(
+            header,
+            context.Reader.ReadUInt16(),
+            context.Reader.ReadUInt16(),
+            context.Reader.ReadUInt16(),
+            context.Reader.ReadUInt16());
     }
 
-    public static ushort GetQuadBits(byte value, int position)
-    { 
-        if (value > 0b1111)
-            throw new ArgumentOutOfRangeException(nameof(value), "value must be between 0 and 0b1111.");
 
-        if (position > 12)
-              throw new ArgumentOutOfRangeException(nameof(position), "position must be between 0 and 3.");
 
-        return (ushort)(value << (15 -  position));
-    }
-}
-
-internal static class ByteHelper
-{
-    public static byte GetBit(bool value, int position)
-    { 
-        if (position > 7)
-            throw new ArgumentOutOfRangeException(nameof(position), "position must be between 0 and 7.");
-
-        if (value)
-            return (byte)(0b01 << (7 - position));
-
-        return 0;
-    }
-
-    public static byte GetQuadBits(byte value, int position)
+    private static HeaderFlags ReadFlags(ReaderContext context)
     {
-        if (value > 0b1111)
-            throw new ArgumentOutOfRangeException(nameof(value), "value must be between 0 and 0b1111.");
+        var value = context.Reader.ReadUInt16();
 
-        if (position > 3)
-            throw new ArgumentOutOfRangeException(nameof(position), "position must be between 0 and 3.");
-
-        return (byte)(value << (7 - position));
+        return new HeaderFlags
+        {
+            QueryReply = value.GetBit(0) ? QueryReply.Reply : QueryReply.Query,
+            OpCode = (OpCode)(value.GetQuadBits(1)),
+            AuthoritativeAnswer = value.GetBit(5),
+            Truncated = value.GetBit(6),
+            RecursionDesired = value.GetBit(7),
+            ResponseCode = value.GetQuadBits(12)
+        };
     }
+
+    private record class ReadHeaderResult(Header Header, ushort QuestionCount, ushort AnswerCount, ushort NameServerRRCount, ushort AdditionalRRCount)
+    {
+    }
+
+    /*
+       
+     */
 }
